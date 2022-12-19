@@ -19,13 +19,30 @@
 #include <wx/textctrl.h>
 //*)
 
+#include <wx/arrstr.h>
+
+#include <map>
+#include <memory>
+#include <string>
+
+#if __has_include("Python.h") && __has_include(<pybind11/pybind11.h>)
+#define PYTHON_RUNNER
+#endif
+
+class LuaRunner;
+#if defined(PYTHON_RUNNER)
+class PythonRunner;
+#endif
 class xLightsFrame;
-class wxJSONValue;
 
 class ScriptsDialog : public wxDialog
 {
 	xLightsFrame* _frame = nullptr;
-    wxString _scriptFolder;
+    wxArrayString _scripts;
+    std::unique_ptr<LuaRunner> _runner;
+	#if defined(PYTHON_RUNNER)
+    std::unique_ptr<PythonRunner> _pyrunner;
+	#endif
 
 public:
 
@@ -33,6 +50,7 @@ public:
 	virtual ~ScriptsDialog();
 
 	//(*Declarations(ScriptsDialog)
+	wxButton* Button_Clear;
 	wxButton* Button_Refresh;
 	wxButton* Button_Run;
 	wxListBox* ListBoxScripts;
@@ -40,31 +58,40 @@ public:
 	wxTextCtrl* TextCtrl_Log;
 	//*)
 
-protected:
+
+
+    protected:
 
 	//(*Identifiers(ScriptsDialog)
 	static const long ID_STATICTEXT1;
 	static const long ID_LISTBOX_SCRIPTS;
 	static const long ID_BUTTON_RUN;
 	static const long ID_BUTTON_REFRESH;
+	static const long ID_BUTTON_CLEAR;
 	static const long ID_TEXTCTRL_LOG;
 	//*)
 
 	static const long ID_MCU_VIEWSCRIPT;
+	static const long ID_MCU_VIEWSCRIPTFOLDER;
 
 private:
 
 	//(*Handlers(ScriptsDialog)
 	void OnButton_RefreshClick(wxCommandEvent& event);
 	void OnButton_RunClick(wxCommandEvent& event);
+	void OnButton_ClearClick(wxCommandEvent& event);
+	void OnListBoxScriptsDClick(wxCommandEvent& event);
 	//*)
 
 	void OnListRClick(wxContextMenuEvent& event);
 	void OnPopup(wxCommandEvent& event);
 
+	void Run_Selected_Script();
 	void LoadScriptDir();
-    void Run_Script(wxString const& filepath);
-    wxString JSONtoString(wxJSONValue const& json) const;
+    void ProcessScriptDir(wxString const& dir);
+    void Run_Lua_Script(wxString const& filepath) const;
+	void Run_Python_Script(wxString const& filepath) const;
+
 
 	DECLARE_EVENT_TABLE()
 };

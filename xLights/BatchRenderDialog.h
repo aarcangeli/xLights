@@ -13,12 +13,16 @@
  //(*Headers(BatchRenderDialog)
  #include <wx/dialog.h>
  class wxButton;
- class wxCheckListBox;
+ class wxCheckBox;
  class wxChoice;
  class wxFlexGridSizer;
+ class wxPanel;
  class wxStaticText;
  class wxTextCtrl;
  //*)
+
+ #include <wx/treelist.h>
+ #include <wx/progdlg.h>
 
 class wxMouseEvent;
 class wxCommandEvent;
@@ -33,15 +37,18 @@ class BatchRenderDialog: public wxDialog
 		//(*Declarations(BatchRenderDialog)
 		wxButton* Button_Cancel;
 		wxButton* Button_Ok;
-		wxCheckListBox* SequenceList;
+		wxCheckBox* CheckBox_ForceHighDefinition;
 		wxChoice* FilterChoice;
 		wxChoice* FolderChoice;
+		wxPanel* CheckListBoxHolder;
 		wxStaticText* StaticText3;
 		wxTextCtrl* TextCtrl_Selected;
 		//*)
 
+		wxTreeListCtrl* CheckListBox_Sequences;
+
         bool Prepare(const wxString &dir);
-        void OnPreviewRightDown(wxMouseEvent& event);
+        void SequenceListPopup(wxTreeListEvent& event);
         void OnPopupCommand(wxCommandEvent &event);
     
         wxArrayString GetFileList();
@@ -52,13 +59,15 @@ class BatchRenderDialog: public wxDialog
 
 protected:
         wxArrayString allFiles;
+		wxString showDirectory;
 
 		//(*Identifiers(BatchRenderDialog)
 		static const long ID_CHOICE_FILTER;
 		static const long ID_CHOICE_FOLDER;
 		static const long ID_STATICTEXT1;
 		static const long ID_TEXTCTRL1;
-		static const long ID_CHECKLISTBOX_SEQUENCES;
+		static const long ID_CHECKBOX1;
+		static const long ID_PANEL_HOLDER;
 		static const long ID_BUTTON1;
 		static const long ID_BUTTON2;
 		//*)
@@ -72,14 +81,18 @@ protected:
 
 		//(*Handlers(BatchRenderDialog)
 		void OnFilterChoiceSelect(wxCommandEvent& event);
-		void OnButton_OkClick(wxCommandEvent& event);
+        void OnButton_OkClick(wxCommandEvent& event);
 		void OnButton_CancelClick(wxCommandEvent& event);
-		void OnSequenceListToggled(wxCommandEvent& event);
 		void OnFolderChoiceSelect(wxCommandEvent& event);
+		void OnInit(wxInitDialogEvent& event);
 		//*)
 
+		void DisplayDateModified(std::string const& fileName, wxTreeListItem& index) const;
+
         void ValidateWindow();
-		void UpdateCount();
+        uint32_t UpdateCount();
+        void OnSequenceListToggled(wxDataViewEvent& event);
+        void SaveSettings();
 
         DECLARE_EVENT_TABLE()
 };

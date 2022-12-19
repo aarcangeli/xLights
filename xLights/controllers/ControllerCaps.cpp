@@ -17,6 +17,7 @@
 #include <wx/dir.h>
 
 #include "../UtilFunctions.h"
+#include "../ExternalHooks.h"
 #include "../outputs/Controller.h"
 
 #include <log4cpp/Category.hh>
@@ -74,29 +75,22 @@ void ControllerCaps::LoadControllers() {
 
     if (wxDir::Exists(d)) {
         wxDir dir(d);
-
-        wxString filename;
-        bool cont = dir.GetFirst(&filename, "*.xcontroller", wxDIR_FILES);
-        int count = 0;
-        while (cont) {
-            count++;
-            cont = dir.GetNext(&filename);
-        }
+        wxArrayString files;
+        GetAllFilesInDir(d, files, "*.xcontroller");
         std::vector<wxXmlDocument> docs;
-        docs.resize(count);
-        filename = "";
-        cont = dir.GetFirst(&filename, "*.xcontroller", wxDIR_FILES);
-        count = 0;
-        while (cont) {
-            wxFileName fn(dir.GetNameWithSep() + filename);
-            wxXmlDocument doc;
-            docs[count].Load(fn.GetFullPath());
-            if (!docs[count].IsOk()) {
-                wxASSERT(false);
-                logger_base.error("Problem loading " + fn.GetFullPath());
+        docs.resize(files.size());
+        int count = 0;
+        for (auto &filename : files) {
+            wxFileName fn(filename);
+            if (FileExists(fn.GetFullPath())) {
+                wxXmlDocument doc;
+                docs[count].Load(fn.GetFullPath());
+                if (!docs[count].IsOk()) {
+                    wxASSERT(false);
+                    logger_base.error("Problem loading " + fn.GetFullPath());
+                }
+                count++;
             }
-            count++;
-            cont = dir.GetNext(&filename);
         }
         std::map<std::string, wxXmlNode *> abstracts;
         for (auto &doc : docs) {
@@ -206,8 +200,11 @@ std::list<std::string> ControllerCaps::GetModels(const std::string& type, const 
                 if (type == CONTROLLER_ETHERNET && it3->SupportsEthernetInputProtols()) {
                     models.push_back(it.first);
                     break;
+                } else if (type == CONTROLLER_SERIAL && it3->SupportsSerialInputProtols()) {
+                    models.push_back(it.first);
+                    break;
                 }
-                else if (type == CONTROLLER_SERIAL && it3->SupportsSerialInputProtols()) {
+                else if (type == CONTROLLER_ETHERNET && it3->IsPlayerOnly()) {
                     models.push_back(it.first);
                     break;
                 }
@@ -253,7 +250,7 @@ ControllerCaps* ControllerCaps::GetControllerConfig(const Controller* const cont
 
 ControllerCaps* ControllerCaps::GetControllerConfig(const std::string& vendor, const std::string& model, const std::string& variant) {
     LoadControllers();
-    std::list<std::string> versions;
+    //std::list<std::string> versions;
 
     auto v = __controllers.find(vendor);
     if (v != __controllers.end()) {
@@ -281,13 +278,28 @@ ControllerCaps* ControllerCaps::GetControllerConfigByID(const std::string& ID) {
     }
     return nullptr;
 }
+
+ControllerCaps* ControllerCaps::GetControllerConfigByModel( const std::string& model, const std::string& variant)
+{
+    LoadControllers();
+    // look for controller in other "vendors" if branding changes
+    for (auto [name, cap] : __controllers) {
+        auto con = cap.find(model);
+        if (con != cap.end()) {
+            auto f = FindVariant(con->second, variant);
+            if (f)
+                return f;
+        }
+    }
+    return nullptr;
+}
 #pragma endregion
 
 #pragma region Getters and Setters
 
 bool ControllerCaps::SupportsUpload() const {
 
-    return DoesXmlNodeExist(_config, "SupportsUpload") || 
+    return DoesXmlNodeExist(_config, "SupportsUpload") ||
            DoesXmlNodeExist(_config, "SupportsInputOnlyUpload");
 }
 
@@ -343,6 +355,11 @@ bool ControllerCaps::SupportsUniversePerString() const
     return DoesXmlNodeExist(_config, "SupportsUniversePerString");
 }
 
+bool ControllerCaps::DMXAfterPixels() const
+{
+    return DoesXmlNodeExist(_config, "DMXAfterPixels");
+}
+
 bool ControllerCaps::SupportsMultipleSimultaneousOutputProtocols() const {
 
     return DoesXmlNodeExist(_config, "SupportsMultipleSimultaneousOutputProtocols");
@@ -361,6 +378,11 @@ bool ControllerCaps::MergeConsecutiveVirtualStrings() const {
 bool ControllerCaps::AllInputUniversesMustBeSameSize() const {
 
     return DoesXmlNodeExist(_config, "AllInputUniversesMustBeSameSize");
+}
+
+bool ControllerCaps::AllInputUniversesMustBe510() const
+{
+    return DoesXmlNodeExist(_config, "AllInputUniversesMustBe510");
 }
 
 bool ControllerCaps::UniversesMustBeInNumericalOrder() const {
@@ -388,6 +410,16 @@ bool ControllerCaps::SupportsPixelPortGamma() const {
     return SupportsPixelPortCommonSettings() || DoesXmlNodeExist(_config, "SupportsPixelPortGamma");
 }
 
+bool ControllerCaps::SupportsDefaultGamma() const
+{
+    return DoesXmlNodeExist(_config, "SupportsDefaultGamma");
+}
+
+bool ControllerCaps::SupportsDefaultBrightness() const
+{
+    return DoesXmlNodeExist(_config, "SupportsDefaultBrightness");
+}
+
 bool ControllerCaps::SupportsPixelPortColourOrder() const {
 
     return SupportsPixelPortCommonSettings() || DoesXmlNodeExist(_config, "SupportsPixelPortColourOrder");
@@ -396,16 +428,22 @@ bool ControllerCaps::SupportsPixelPortColourOrder() const {
 bool ControllerCaps::SupportsEthernetInputProtols() const
 {
     for (const auto& it : GetInputProtocols()) {
-        if (it == "e131" || it == "artnet" || it == "kinet" || it == "zcpp" || it == "ddp" || it == "opc" || it == "xxx ethernet") return true;
+        if (it == "e131" || it == "artnet" || it == "kinet" || it == "zcpp" || it == "ddp" || it == "opc" || it == "xxx ethernet" || it == "twinkly")
+            return true;
     }
     return false;
+}
+
+bool ControllerCaps::IsPlayerOnly() const
+{
+    return DoesXmlNodeExist(_config, "PlayerOnly");
 }
 
 bool ControllerCaps::SupportsSerialInputProtols() const
 {
     for (const auto& it : GetInputProtocols()) {
-        if (it == "dmx" || it == "lor" || it == "renard" || 
-            it == "opendmx" || it == "pixelnet" || it == "open pixelnet" || 
+        if (it == "dmx" || it == "lor" || it == "renard" ||
+            it == "opendmx" || it == "pixelnet" || it == "open pixelnet" ||
             it == "dlight" || it == "lor optimised" || it == "xxx serial" || it == "ddp-input") return true;
     }
     return false;
@@ -435,6 +473,11 @@ bool ControllerCaps::SupportsPixelPortDirection() const {
 bool ControllerCaps::SupportsPixelPortGrouping() const {
 
     return SupportsPixelPortCommonSettings() || DoesXmlNodeExist(_config, "SupportsPixelPortGrouping");
+}
+
+bool ControllerCaps::SupportsPixelZigZag() const
+{
+    return DoesXmlNodeExist(_config, "SupportsPixelZigZag");
 }
 
 bool ControllerCaps::SupportsTs() const
@@ -524,6 +567,11 @@ int ControllerCaps::GetMaxGroupPixels() const
     return wxAtoi(GetXmlNodeContent(_config, "MaxGroup", "-1"));
 }
 
+int ControllerCaps::GetMaxZigZagPixels() const
+{
+    return wxAtoi(GetXmlNodeContent(_config, "MaxZigZag", "-1"));
+}
+
 int ControllerCaps::GetMinGroupPixels() const
 {
     return wxAtoi(GetXmlNodeContent(_config, "MinGroup", "-1"));
@@ -603,6 +651,11 @@ std::string ControllerCaps::GetVariantName() const {
 std::string ControllerCaps::GetID() const {
     auto name = _config->GetAttribute("ID");
     return name.ToStdString();
+}
+
+std::string ControllerCaps::GetPreferredInputProtocol() const
+{
+    return GetXmlNodeContent(_config, "PreferredInputProtocol", "");
 }
 
 std::vector<std::string> ControllerCaps::GetSmartRemoteTypes() const {

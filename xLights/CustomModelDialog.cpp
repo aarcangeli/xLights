@@ -10,15 +10,17 @@
 
 #include "CustomModelDialog.h"
 
+#include <wx/artprov.h>
 #include <wx/msgdlg.h>
 #include <wx/clipbrd.h>
 #include <wx/graphics.h>
 #include <wx/file.h>
 #include <wx/numdlg.h>
 #include <wx/config.h>
+#include <wx/config.h>
+#include <wx/choicdlg.h>
 
 //(*InternalHeaders(CustomModelDialog)
-#include <wx/artprov.h>
 #include <wx/bitmap.h>
 #include <wx/bmpbuttn.h>
 #include <wx/button.h>
@@ -43,6 +45,9 @@
 #include "UtilFunctions.h"
 #include "ExternalHooks.h"
 #include "ModelPreview.h"
+#include "outputs/TwinklyOutput.h"
+#include "Discovery.h"
+#include "outputs/OutputManager.h"
 
 //(*IdInit(CustomModelDialog)
 const long CustomModelDialog::ID_SPINCTRL1 = wxNewId();
@@ -51,6 +56,8 @@ const long CustomModelDialog::ID_STATICTEXT1 = wxNewId();
 const long CustomModelDialog::ID_SPINCTRL3 = wxNewId();
 const long CustomModelDialog::ID_CHECKBOX1 = wxNewId();
 const long CustomModelDialog::ID_BUTTON3 = wxNewId();
+const long CustomModelDialog::ID_CHECKBOX_SHOW_DUPS = wxNewId();
+const long CustomModelDialog::ID_CHECKBOX2 = wxNewId();
 const long CustomModelDialog::ID_BITMAPBUTTON_CUSTOM_CUT = wxNewId();
 const long CustomModelDialog::ID_BITMAPBUTTON_CUSTOM_COPY = wxNewId();
 const long CustomModelDialog::ID_BITMAPBUTTON_CUSTOM_PASTE = wxNewId();
@@ -62,6 +69,7 @@ const long CustomModelDialog::ID_BITMAPBUTTON_CUSTOM_BKGRD = wxNewId();
 const long CustomModelDialog::ID_CHECKBOX_AUTO_NUMBER = wxNewId();
 const long CustomModelDialog::ID_CHECKBOX_AUTO_INCREMENT = wxNewId();
 const long CustomModelDialog::ID_SPINCTRL_NEXT_CHANNEL = wxNewId();
+const long CustomModelDialog::ID_BUTTON4 = wxNewId();
 const long CustomModelDialog::ID_BUTTON1 = wxNewId();
 const long CustomModelDialog::ID_BUTTON2 = wxNewId();
 const long CustomModelDialog::ID_NOTEBOOK1 = wxNewId();
@@ -75,7 +83,9 @@ const long CustomModelDialog::CUSTOMMODELDLGMNU_COPY = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_PASTE = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_DELETE = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_FLIPH = wxNewId();
+const long CustomModelDialog::CUSTOMMODELDLGMNU_FLIPHSELECTED = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_FLIPV = wxNewId();
+const long CustomModelDialog::CUSTOMMODELDLGMNU_FLIPVSELECTED = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_ROTATE90 = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_ROTATE = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_REVERSE = wxNewId();
@@ -111,6 +121,7 @@ const long CustomModelDialog::CUSTOMMODELDLGMNU_WIREHORIZONTALLEFT = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_WIREHORIZONTALRIGHT = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_WIREVERTICALTOP = wxNewId();
 const long CustomModelDialog::CUSTOMMODELDLGMNU_WIREVERTICALBOTTOM = wxNewId();
+const long CustomModelDialog::ID_TIMER1 = wxNewId();
 
 wxDEFINE_EVENT(EVT_GRID_KEY, wxCommandEvent);
 wxDEFINE_EVENT(EVT_SWITCH_GRID, wxCommandEvent);
@@ -302,17 +313,18 @@ class CopyPasteGrid : public wxGrid
     }
 };
 
-CustomModelDialog::CustomModelDialog(wxWindow* parent)
-: background_image(""),
+CustomModelDialog::CustomModelDialog(wxWindow* parent, OutputManager* om) : background_image(""),
   bkg_image(nullptr),
   bkgrd_active(true),
   lightness(80),
   autonumber(false),
   autoincrement(false),
-  next_channel(1)
+  next_channel(1),
+    _outputManager(om)
 {
 	//(*Initialize(CustomModelDialog)
 	wxFlexGridSizer* FlexGridSizer11;
+	wxFlexGridSizer* FlexGridSizer12;
 	wxFlexGridSizer* FlexGridSizer1;
 	wxFlexGridSizer* FlexGridSizer2;
 	wxFlexGridSizer* FlexGridSizer3;
@@ -361,16 +373,22 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
 	FlexGridSizer8->Add(CheckBox_ShowWiring, 1, wxALL|wxEXPAND, 5);
 	ButtonWiring = new wxButton(this, ID_BUTTON3, _("Wiring View"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, _T("ID_BUTTON3"));
 	FlexGridSizer8->Add(ButtonWiring, 1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
+	CheckBox_Show_Duplicates = new wxCheckBox(this, ID_CHECKBOX_SHOW_DUPS, _("Show Duplicate Nodes"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, _T("ID_CHECKBOX_SHOW_DUPS"));
+	CheckBox_Show_Duplicates->SetValue(false);
+	FlexGridSizer8->Add(CheckBox_Show_Duplicates, 1, wxALL|wxEXPAND, 5);
+	CheckBox_OutputToLights = new wxCheckBox(this, ID_CHECKBOX2, _("Output to Lights"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, _T("ID_CHECKBOX2"));
+	CheckBox_OutputToLights->SetValue(false);
+	FlexGridSizer8->Add(CheckBox_OutputToLights, 1, wxALL|wxEXPAND, 5);
 	Sizer2->Add(FlexGridSizer8, 1, wxALL|wxALIGN_CENTER_HORIZONTAL, 5);
 	FlexGridSizer5 = new wxFlexGridSizer(0, 7, 0, 0);
-	BitmapButtonCustomCut = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_CUT, wxArtProvider::GetBitmap(wxART_MAKE_ART_ID_FROM_STR(_T("wxART_CUT")),wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_CUT"));
+	BitmapButtonCustomCut = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_CUT, wxArtProvider::GetBitmapBundle("wxART_CUT", wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_CUT"));
 	BitmapButtonCustomCut->SetToolTip(_("Cut"));
 	FlexGridSizer5->Add(BitmapButtonCustomCut, 1, wxLEFT|wxRIGHT|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
-	BitmapButtonCustomCopy = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_COPY, wxArtProvider::GetBitmap(wxART_MAKE_ART_ID_FROM_STR(_T("wxART_COPY")),wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_COPY"));
+	BitmapButtonCustomCopy = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_COPY, wxArtProvider::GetBitmapBundle("wxART_COPY", wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_COPY"));
 	BitmapButtonCustomCopy->SetDefault();
 	BitmapButtonCustomCopy->SetToolTip(_("Copy"));
 	FlexGridSizer5->Add(BitmapButtonCustomCopy, 1, wxLEFT|wxRIGHT|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
-	BitmapButtonCustomPaste = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_PASTE, wxArtProvider::GetBitmap(wxART_MAKE_ART_ID_FROM_STR(_T("wxART_PASTE")),wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_PASTE"));
+	BitmapButtonCustomPaste = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_PASTE, wxArtProvider::GetBitmapBundle("wxART_PASTE", wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_PASTE"));
 	BitmapButtonCustomPaste->SetDefault();
 	BitmapButtonCustomPaste->SetToolTip(_("Paste"));
 	FlexGridSizer5->Add(BitmapButtonCustomPaste, 1, wxLEFT|wxRIGHT|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
@@ -391,7 +409,7 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
 	FlexGridSizer1->Add(-1,-1,1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
 	SliderCustomLightness = new wxSlider(this, ID_SLIDER_CUSTOM_LIGHTNESS, 0, 0, 100, wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, _T("ID_SLIDER_CUSTOM_LIGHTNESS"));
 	FlexGridSizer1->Add(SliderCustomLightness, 1, wxTOP|wxBOTTOM|wxLEFT|wxEXPAND, 5);
-	BitmapButtonCustomBkgrd = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_BKGRD, wxArtProvider::GetBitmap(wxART_MAKE_ART_ID_FROM_STR(_T("wxART_FIND")),wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_BKGRD"));
+	BitmapButtonCustomBkgrd = new wxBitmapButton(this, ID_BITMAPBUTTON_CUSTOM_BKGRD, wxArtProvider::GetBitmapBundle("wxART_FIND", wxART_BUTTON), wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW, wxDefaultValidator, _T("ID_BITMAPBUTTON_CUSTOM_BKGRD"));
 	BitmapButtonCustomBkgrd->SetDefault();
 	BitmapButtonCustomBkgrd->SetMinSize(wxSize(24,-1));
 	FlexGridSizer1->Add(BitmapButtonCustomBkgrd, 1, wxTOP|wxBOTTOM|wxRIGHT, 5);
@@ -415,7 +433,11 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
 	FlexGridSizer4->Add(SpinCtrlNextChannel, 1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
 	FlexGridSizer3->Add(FlexGridSizer4, 1, wxEXPAND, 5);
 	StaticBoxSizer1->Add(FlexGridSizer3, 1, wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
-	Sizer2->Add(StaticBoxSizer1, 1, wxALIGN_LEFT, 5);
+	Sizer2->Add(StaticBoxSizer1, 1, wxEXPAND, 5);
+	FlexGridSizer12 = new wxFlexGridSizer(0, 3, 0, 0);
+	Button_ImportFromController = new wxButton(this, ID_BUTTON4, _("Import From Controller"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, _T("ID_BUTTON4"));
+	FlexGridSizer12->Add(Button_ImportFromController, 1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
+	Sizer2->Add(FlexGridSizer12, 1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
 	FlexGridSizer7 = new wxFlexGridSizer(0, 3, 0, 0);
 	ButtonOk = new wxButton(this, ID_BUTTON1, _("Ok"), wxDefaultPosition, wxDefaultSize, 0, wxDefaultValidator, _T("ID_BUTTON1"));
 	FlexGridSizer7->Add(ButtonOk, 1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
@@ -427,7 +449,6 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
 	FlexGridSizer9->AddGrowableCol(0);
 	FlexGridSizer9->AddGrowableRow(0);
 	SplitterWindow1 = new wxSplitterWindow(this, ID_SPLITTERWINDOW1, wxDefaultPosition, wxDefaultSize, wxSP_3D, _T("ID_SPLITTERWINDOW1"));
-	SplitterWindow1->SetMinimumPaneSize(0);
 	SplitterWindow1->SetSashGravity(0.5);
 	Panel11 = new wxPanel(SplitterWindow1, ID_PANEL2, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL, _T("ID_PANEL2"));
 	FlexGridSizer11 = new wxFlexGridSizer(0, 1, 0, 0);
@@ -459,6 +480,8 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
 	Connect(ID_SPINCTRL3,wxEVT_COMMAND_SPINCTRL_UPDATED,(wxObjectEventFunction)&CustomModelDialog::OnSpinCtrl_DepthChange);
 	Connect(ID_CHECKBOX1,wxEVT_COMMAND_CHECKBOX_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnCheckBox_ShowWiringClick);
 	Connect(ID_BUTTON3,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnButtonWiringClick);
+	Connect(ID_CHECKBOX_SHOW_DUPS,wxEVT_COMMAND_CHECKBOX_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnCheckBox_Show_DuplicatesClick);
+	Connect(ID_CHECKBOX2,wxEVT_COMMAND_CHECKBOX_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnCheckBox_OutputToLightsClick);
 	Connect(ID_BITMAPBUTTON_CUSTOM_CUT,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnBitmapButtonCustomCutClick);
 	Connect(ID_BITMAPBUTTON_CUSTOM_COPY,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnBitmapButtonCustomCopyClick);
 	Connect(ID_BITMAPBUTTON_CUSTOM_PASTE,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnBitmapButtonCustomPasteClick);
@@ -470,6 +493,7 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
 	Connect(ID_CHECKBOX_AUTO_NUMBER,wxEVT_COMMAND_CHECKBOX_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnCheckBoxAutoNumberClick);
 	Connect(ID_CHECKBOX_AUTO_INCREMENT,wxEVT_COMMAND_CHECKBOX_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnCheckBoxAutoIncrementClick);
 	Connect(ID_SPINCTRL_NEXT_CHANNEL,wxEVT_COMMAND_SPINCTRL_UPDATED,(wxObjectEventFunction)&CustomModelDialog::OnSpinCtrlNextChannelChange);
+	Connect(ID_BUTTON4,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnButton_ImportFromControllerClick);
 	Connect(ID_BUTTON1,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnButtonOkClick);
 	Connect(ID_BUTTON2,wxEVT_COMMAND_BUTTON_CLICKED,(wxObjectEventFunction)&CustomModelDialog::OnButtonCancelClick);
 	Connect(ID_NOTEBOOK1,wxEVT_COMMAND_NOTEBOOK_PAGE_CHANGED,(wxObjectEventFunction)&CustomModelDialog::OnNotebook1PageChanged);
@@ -496,6 +520,11 @@ CustomModelDialog::CustomModelDialog(wxWindow* parent)
     Layout();
 
     ValidateWindow();
+
+    _oldOutputToLights = _outputManager->IsOutputting();
+    if (_oldOutputToLights) {
+        _outputManager->StopOutput();
+    }
 }
 
 CustomModelDialog::~CustomModelDialog()
@@ -514,6 +543,11 @@ CustomModelDialog::~CustomModelDialog()
 
 	if( bkg_image != nullptr ) {
         delete bkg_image;
+    }
+
+    StopOutputToLights();
+    if (_oldOutputToLights) {
+        _outputManager->StartOutput();
     }
 }
 
@@ -549,7 +583,6 @@ void CustomModelDialog::UpdatePreview()
 
 void CustomModelDialog::Setup(CustomModel* m)
 {
-
     _model = m;
     _modelPreview->SetModel(m, CheckBox_ShowWiring->IsChecked(), true);
     name = m->GetName();
@@ -559,7 +592,7 @@ void CustomModelDialog::Setup(CustomModel* m)
     SliderCustomLightness->SetValue(lightness);
     std::string data = m->GetCustomData();
 
-    if (background_image != "" && wxFile::Exists(background_image)) {
+    if (background_image != "" && FileExists(background_image)) {
         bkg_image = new wxImage(background_image);
     }
 
@@ -652,8 +685,22 @@ void CustomModelDialog::Setup(CustomModel* m)
 // make grid the size specified by the spin controls
 void CustomModelDialog::ResizeCustomGrid()
 {
+    CheckBox_Show_Duplicates->SetValue(false);
+    ClearDupNodes();
+
     int numCols = WidthSpin->GetValue();
     int numRows = HeightSpin->GetValue();
+    int numLayers = SpinCtrl_Depth->GetValue();
+
+    // remove/add layers first
+    while (Notebook1->GetPageCount() < numLayers) {
+        AddPage();
+    }
+
+    while (Notebook1->GetPageCount() > numLayers) {
+        RemovePage();
+    }
+
     for (auto grid : _grids) {
         int deltaCols = numCols - grid->GetNumberCols();
         int deltaRows = numRows - grid->GetNumberRows();
@@ -728,15 +775,7 @@ void CustomModelDialog::OnHeightSpinChange(wxSpinEvent& event)
 void CustomModelDialog::OnSpinCtrl_DepthChange(wxSpinEvent& event)
 {
     _changed = true;
-    while (Notebook1->GetPageCount() < SpinCtrl_Depth->GetValue())
-    {
-        AddPage();
-    }
-
-    while (Notebook1->GetPageCount() > SpinCtrl_Depth->GetValue())
-    {
-        RemovePage();
-    }
+    ResizeCustomGrid();
     UpdatePreview();
 }
 
@@ -1960,6 +1999,55 @@ void CustomModelDialog::ShiftSelected()
     }
 }
 
+void CustomModelDialog::FlipHorzSelected()
+{
+    for (auto grid : _grids) 
+    {
+        // Rewrite the grid values
+        for (auto r = 0; r < grid->GetNumberRows(); ++r) {
+            std::list<wxString> vals;
+            for (auto c = 0; c < grid->GetNumberCols(); c++) {
+                if (grid->IsInSelection(r, c)) { // only if selected
+                    vals.push_front(grid->GetCellValue(r, c));
+                }
+            }
+            for (auto c = 0; c < grid->GetNumberCols(); c++) {
+                if (grid->IsInSelection(r, c)) { // only if selected
+                    grid->SetCellValue(r, c, vals.front());
+                    vals.erase(vals.begin());
+                }
+            }
+        }
+    }
+    UpdateBackground();
+    UpdatePreview();
+    ValidateWindow();
+}
+
+void CustomModelDialog::FlipVertSelected()
+{
+    for (auto grid : _grids) {
+        // Rewrite the grid values
+        for (auto c = 0; c < grid->GetNumberCols(); c++) {
+            std::list<wxString> vals;
+            for (auto r = 0; r < grid->GetNumberRows(); ++r) {
+                if (grid->IsInSelection(r, c)) { // only if selected
+                    vals.push_front(grid->GetCellValue(r, c));
+                }
+            }
+            for (auto r = 0; r < grid->GetNumberRows(); ++r) {
+                if (grid->IsInSelection(r, c)) { // only if selected
+                    grid->SetCellValue(r, c, vals.front());
+                    vals.erase(vals.begin());
+                }
+            }
+        }
+    }
+    UpdateBackground();
+    UpdatePreview();
+    ValidateWindow();
+}
+
 void CustomModelDialog::OnPaste(wxCommandEvent& event)
 {
     UpdateHighlight(-1,-1);
@@ -2044,8 +2132,12 @@ void CustomModelDialog::OnGridPopup(wxCommandEvent& event)
         DeleteCells();
     } else if (id == CUSTOMMODELDLGMNU_FLIPH) {
         FlipHorizontal();
+    } else if (id == CUSTOMMODELDLGMNU_FLIPHSELECTED) {
+        FlipHorzSelected();
     } else if (id == CUSTOMMODELDLGMNU_FLIPV) {
         FlipVertical();
+    } else if (id == CUSTOMMODELDLGMNU_FLIPVSELECTED) {
+        FlipVertSelected();
     } else if (id == CUSTOMMODELDLGMNU_ROTATE90) {
         Rotate90();
     } else if (id == CUSTOMMODELDLGMNU_ROTATE) {
@@ -2529,7 +2621,7 @@ void CustomModelDialog::OnFilePickerCtrl1FileChanged(wxFileDirPickerEvent& event
     background_image = FilePickerCtrl1->GetFileName().GetFullPath();
     if (background_image != "") {
         ObtainAccessToURL(background_image);
-        if (wxFile::Exists(background_image)) {
+        if (FileExists(background_image)) {
             bkg_image = new wxImage(background_image);
             if (!bkg_image->IsOk()) {
                 delete bkg_image;
@@ -2615,7 +2707,13 @@ void CustomModelDialog::OnGridCustomCellRightClick(wxGridEvent& event)
     mnu.AppendSeparator();
 
     mnu.Append(CUSTOMMODELDLGMNU_FLIPH, "Horizontal Flip");
+    if (GetActiveGrid()->GetSelectionBlockBottomRight().Count() > 0) {
+        mnu.Append(CUSTOMMODELDLGMNU_FLIPHSELECTED, "Horizontal Flip Selected");
+    }
     mnu.Append(CUSTOMMODELDLGMNU_FLIPV, "Vertical Flip");
+    if (GetActiveGrid()->GetSelectionBlockBottomRight().Count() > 0) {
+        mnu.Append(CUSTOMMODELDLGMNU_FLIPVSELECTED, "Vertical Flip Selected");
+    }
     mnu.Append(CUSTOMMODELDLGMNU_ROTATE90, "Rotate 90");
     mnu.Append(CUSTOMMODELDLGMNU_ROTATE, "Rotate x");
     mnu.Append(CUSTOMMODELDLGMNU_REVERSE, "Reverse");
@@ -2826,6 +2924,8 @@ void CustomModelDialog::RemovePage()
 
 void CustomModelDialog::OnNotebook1PageChanged(wxNotebookEvent& event)
 {
+    CheckBox_Show_Duplicates->SetValue(false);
+    ClearDupNodes();
     bool first = (Notebook1->GetSelection() == 0);
     bool last = (Notebook1->GetSelection() == Notebook1->GetPageCount() - 1);
 
@@ -3059,6 +3159,9 @@ void CustomModelDialog::FindLast()
 
 void CustomModelDialog::OnSwitchGrid(wxCommandEvent& event)
 {
+    CheckBox_Show_Duplicates->SetValue(false);
+    ClearDupNodes();
+
     int moveVal = event.GetInt();
     auto col = GetActiveGrid()->GetGridCursorCol();
     auto row = GetActiveGrid()->GetGridCursorRow();
@@ -3078,4 +3181,226 @@ void CustomModelDialog::OnSwitchGrid(wxCommandEvent& event)
         }
     }
     UpdateHighlight(-1, -1);
+}
+
+float CustomModelDialog::GetLineLen(const std::tuple<float, float, float>& pt1, const std::tuple<float, float, float>& pt2) const
+{
+    float xdiff = std::get<0>(pt1) - std::get<0>(pt2);
+    float ydiff = std::get<1>(pt1) - std::get<1>(pt2);
+    return std::sqrt((xdiff * xdiff) + (ydiff * ydiff));
+}
+
+void CustomModelDialog::OnButton_ImportFromControllerClick(wxCommandEvent& event)
+{
+    wxArrayString choices;
+
+    Discovery discovery(this, nullptr); // need to make sure we dont try to discover anything that cares about the output manager pointer
+    TwinklyOutput::PrepareDiscovery(discovery);
+
+    discovery.Discover();
+
+    for (int x = 0; x < discovery.GetResults().size(); x++) {
+        auto discovered = discovery.GetResults()[x];
+        if (!discovered->controller) {
+            continue;
+        }
+        ControllerEthernet* it = discovered->controller;
+
+        if (it->GetProtocol() == OUTPUT_TWINKLY) {
+            int32_t startchannel = 1;
+            int nullnumber = 0;
+            it->SetTransientData(startchannel, nullnumber);
+            choices.push_back(it->GetLongDescription());
+        }
+    }
+
+    wxSingleChoiceDialog dlg(this, "Select controller to load from", "Download from controller", choices);
+
+    if (dlg.ShowModal() == wxID_OK) {
+        ControllerEthernet* downloadFrom = nullptr;
+        for (int x = 0; x < discovery.GetResults().size(); x++) {
+            auto discovered = discovery.GetResults()[x];
+            if (!discovered->controller) {
+                continue;
+            }
+            ControllerEthernet* it = discovered->controller;
+            if (it->GetLongDescription() == choices[dlg.GetSelection()]) {
+                downloadFrom = it;
+                break;
+            }
+        }
+
+        if (downloadFrom != nullptr) {
+            std::vector<std::tuple<float, float, float>> modelData;
+            TwinklyOutput::GetLayout(downloadFrom->GetResolvedIP(), modelData);
+
+            if (modelData.size() > 0) {
+                // set the z size to 1
+                SpinCtrl_Depth->SetValue(1);
+
+                // clear existing model data
+                DeleteCells();
+
+                // now we need to work out a good size to hold the data
+                std::tuple<float, float, float> last = { 9999, 9999, 9999 };
+                float minDiff = 9999.0;
+                float minX = 9999.0;
+                float minY = 9999.0;
+                for (const auto& it : modelData) {
+                    if (std::get<0>(last) == 9999) {
+                        // dont process the first one
+                    } else {
+                        if (GetLineLen(last, it) < minDiff) {
+                            minDiff = GetLineLen(last, it);
+                        }
+                    }
+                    if (std::get<0>(it) < minX)
+                        minX = std::get<0>(it);
+                    if (std::get<1>(it) < minY)
+                        minY = std::get<1>(it);
+                    last = it;
+                }
+                if (minDiff == 0)
+                    minDiff = 0.01f;
+                if (minDiff == 9999.0) {
+                    // must just be one node
+                    for (auto& it : modelData) {
+                        it = { 0, 0, 0 };
+                    }
+                    HeightSpin->SetValue(1);
+                    WidthSpin->SetValue(1);
+                } else {
+                    float multiplier = 1.0 / (minDiff + 0.00001f);
+                    float maxX = 0;
+                    float maxY = 0;
+
+                    // rescale everything and zero base it
+                    for (auto& it : modelData) {
+                        it = { (std::get<0>(it) - minX) * multiplier, (std::get<1>(it) - minY) * multiplier, 0 };
+                        if (std::get<0>(it) > maxX)
+                            maxX = std::get<0>(it);
+                        if (std::get<1>(it) > maxY)
+                            maxY = std::get<1>(it);
+                    }
+                    HeightSpin->SetValue(maxY+1);
+                    WidthSpin->SetValue(maxX+1);
+                }
+
+                ResizeCustomGrid();
+
+                auto grid = GetLayerGrid(0);
+
+                int i = 1;
+                for (const auto& it : modelData) {
+                    auto x = std::get<0>(it);
+                    auto y = std::get<1>(it);
+                    if (grid->GetCellValue(y, x) == "") {
+                        grid->SetCellValue(y, x, wxString::Format("%d", i++));
+                    }
+                }
+
+                UpdatePreview();
+                ValidateWindow();
+            }
+        }
+    }
+}
+
+void CustomModelDialog::OnCheckBox_Show_DuplicatesClick(wxCommandEvent& event)
+{
+    if (CheckBox_Show_Duplicates->IsChecked()) {
+        DrawDupNodes();
+    } else {
+        ClearDupNodes();
+    }
+
+}
+
+void CustomModelDialog::DrawDupNodes()
+{
+    int const layer = Notebook1->GetSelection();
+    int const numCols = WidthSpin->GetValue();
+    auto grid = GetActiveGrid();
+    _dup_pts.clear();
+    for (size_t ii = 0; ii < _model->GetNodeCount(); ii++) {
+        std::vector<wxPoint> pts;
+        _model->GetNodeCoords(ii, pts);
+        if (pts.size() > 1) {
+            for (auto const& pt : pts)
+            {
+                int const x{ pt.x - (numCols * layer) };
+                int const y{ (int)_model->GetCustomHeight() - (pt.y) - 1 };
+                if (x < 0 || x > numCols) {
+                    continue;
+                }
+                wxPoint npt{ x, y };
+                _dup_pts.emplace_back(npt, grid->GetCellBackgroundColour(y, x));
+                grid->SetCellBackgroundColour(y, x, *wxYELLOW);
+            }
+        }
+    }
+    grid->Refresh();
+}
+
+void CustomModelDialog::ClearDupNodes()
+{
+    auto grid = GetActiveGrid();
+    for (auto const& pt :_dup_pts) {
+        grid->SetCellBackgroundColour(pt.first.y, pt.first.x, pt.second);
+    }
+    grid->Refresh();
+    _dup_pts.clear();
+}
+
+void CustomModelDialog::OnTimer1Trigger(wxTimerEvent& event)
+{
+    wxASSERT(_outputManager->IsOutputting());
+    _outputManager->StartFrame(0);
+    auto grid = GetActiveGrid();
+    auto value = grid->GetCellValue(grid->GetGridCursorRow(), grid->GetGridCursorCol());
+    auto v = -1;
+    if (value != "") {
+        v = wxAtoi(value) - 1;
+    }
+    for (uint32_t ch = _model->GetFirstChannel(); ch <= _model->GetLastChannel(); ++ch) {
+        auto n = (ch - _model->GetFirstChannel()) / _model->GetChanCountPerNode();
+        if (v != -1 && v == n) {
+            _outputManager->SetOneChannel(ch, 30);
+        } else {
+            _outputManager->SetOneChannel(ch, 0);
+        }
+    }
+    _outputManager->EndFrame();
+}
+
+void CustomModelDialog::StartOutputToLights()
+{
+    if (!timer1.IsRunning()) {
+        _outputManager->StartOutput();
+        timer1.SetOwner(this, ID_TIMER1);
+        Connect(ID_TIMER1, wxEVT_TIMER, (wxObjectEventFunction)&CustomModelDialog::OnTimer1Trigger);
+        timer1.Start(50, false);
+    }
+}
+
+bool CustomModelDialog::StopOutputToLights()
+{
+    if (timer1.IsRunning()) {
+        timer1.Stop();
+        _outputManager->StartFrame(0);
+        _outputManager->AllOff();
+        _outputManager->EndFrame();
+        _outputManager->StopOutput();
+        return true;
+    }
+    return false;
+}
+
+void CustomModelDialog::OnCheckBox_OutputToLightsClick(wxCommandEvent& event)
+{
+    if (CheckBox_OutputToLights->IsChecked()) {
+        StartOutputToLights();
+    } else {
+        StopOutputToLights();
+    }
 }

@@ -34,6 +34,7 @@
 #include <wx/treelist.h>
 #include <wx/file.h>
 
+#include "../common/xlBaseApp.h"
 #include "ScanWork.h"
 
 class wxDebugReportCompress;
@@ -56,10 +57,11 @@ enum class TITLE_PRIORITY {
     TP_NONE
 };
 
-class xScannerFrame : public wxFrame
+class xScannerFrame : public xlFrame
 {
     std::pair<std::string, std::string> nullPair = { "","" };
     wxTreeListCtrl* _tree = nullptr;
+    wxTreeListItem _item;
     WorkManager _workManager;
     void Scan();
     std::string GetItem(std::list<std::pair<std::string, std::string>>& res, const std::string& label);
@@ -74,12 +76,13 @@ class xScannerFrame : public wxFrame
     void UpdateDeviceTitle(wxTreeListCtrl* tree, wxTreeListItem& ti, TITLE_PRIORITY tp, const std::string& name);
         //void AddIP(wxTreeListItem ti, const IPObject& ip);
 
+    void AddtoxLights(wxTreeListItem& item);
+
 public:
 
         xScannerFrame(wxWindow* parent, bool singleThreaded, wxWindowID id = -1);
         virtual ~xScannerFrame();
-        void CreateDebugReport(wxDebugReportCompress *report);
-        void SendReport(const wxString &loc, wxDebugReportCompress &report);
+        virtual void CreateDebugReport(xlCrashHandler* crashHandler) override;
         void ExportItem(int skip, wxTreeListItem& item, wxFile& f);
         void ProcessScanResult(std::list<std::pair<std::string, std::string>>& res);
         void ProcessScanResults();
@@ -120,6 +123,7 @@ private:
 
         static const long ID_MNU_EXPORT;
         static const long ID_MNU_RESCAN;
+        static const long ID_MNU_ADDTOXLIGHTS;
 
         //(*Declarations(xScannerFrame)
         wxMenu Menu1;

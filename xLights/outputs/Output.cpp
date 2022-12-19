@@ -24,6 +24,7 @@
 #include "DMXOutput.h"
 #include "xxxSerialOutput.h"
 #include "xxxEthernetOutput.h"
+#include "TwinklyOutput.h"
 #include "OPCOutput.h"
 #include "PixelNetOutput.h"
 #include "RenardOutput.h"
@@ -32,7 +33,6 @@
 #include "GenericSerialOutput.h"
 #include "../UtilFunctions.h"
 #include "OutputManager.h"
-#include "TwinklyOutput.h"
 
 #include <log4cpp/Category.hh>
 
@@ -61,8 +61,10 @@ Output::Output(Output* output) {
     _suppressDuplicateFrames = output->IsSuppressDuplicateFrames();
     _description_CONVERT = output->GetDescription_CONVERT();
     _autoSize_CONVERT = output->IsAutoSize_CONVERT();
+    _forceLocalIP = output->GetForceLocalIP();
     _fppProxy = output->GetFPPProxyIP();
     _globalFPPProxy = output->_globalFPPProxy;
+    _globalForceLocalIP = output->_globalForceLocalIP;
     _enabled = output->IsEnabled();
 }
 
@@ -160,7 +162,7 @@ Output* Output::Create(Controller* c, wxXmlNode* node, std::string showDir) {
     }
     else if (type == OUTPUT_xxxETHERNET) {
         return new xxxEthernetOutput(node);
-    } 
+    }
     else if (type == OUTPUT_TWINKLY) {
         return new TwinklyOutput(node);
     }
@@ -184,6 +186,16 @@ void Output::SetIP(const std::string& ip) {
         _resolvedIp = _ip;
         _dirty = true;
     }
+}
+
+std::string Output::GetForceLocalIPToUse() const
+{
+    auto lip = GetForceLocalIP();
+    if (lip == "")
+        lip = _globalForceLocalIP;
+    if (lip != "" && !IsValidLocalIP(lip))
+        lip = "";
+    return lip;
 }
 
 void Output::SetTransientData(int32_t& startChannel, int nullnumber) {

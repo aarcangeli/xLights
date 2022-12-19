@@ -22,19 +22,24 @@
 #include "../../xSchedule/wxJSON/jsonreader.h"
 #include "../../xSchedule/wxJSON/jsonwriter.h"
 #include "../UtilFunctions.h"
+#include "../ExternalHooks.h"
 #include "../xLightsApp.h"
 #include "../JukeboxPanel.h"
 #include "../outputs/E131Output.h"
 #include "../../xSchedule/wxHTTPServer/wxhttpserver.h"
+#include "../sequencer/MainSequencer.h"
+#include <wx/uri.h>
+
+#include "LuaRunner.h"
 
 #include <log4cpp/Category.hh>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
 {
-    if (wxFile::Exists(seq))
+    if (FileExists(seq))
         return seq;
 
-    if (wxFile::Exists(CurrentDir + wxFileName::GetPathSeparator() + seq))
+    if (FileExists(CurrentDir + wxFileName::GetPathSeparator() + seq))
         return CurrentDir + wxFileName::GetPathSeparator() + seq;
     
     return "";
@@ -47,19 +52,6 @@ static bool HttpRequestFunction(HttpConnection &connection, HttpRequest &request
 static wxString MIME_JSON = "application/json";
 static wxString MIME_TEXT = "text/plain";
 
-static std::string UnEscapeURI(const std::string &s) {
-    int idx = s.find("%20");
-    if (idx != std::string::npos) {
-        std::string ns = s.substr(0, idx) + " " + s.substr(idx + 3);
-        idx = ns.find("%20", idx + 1);
-        while (idx != std::string::npos) {
-            ns = ns.substr(0, idx) + " " + ns.substr(idx + 3);
-            idx = ns.find("%20", idx + 1);
-        }
-        return ns;
-    }
-    return s;
-}
 static std::map<std::string, std::string> ParseParams(const wxString &params) {
     std::map<std::string, std::string> p;
     std::string np = params;
@@ -78,7 +70,7 @@ static std::map<std::string, std::string> ParseParams(const wxString &params) {
             value = np2.substr(idx + 1);
             np2 = np2.substr(0, idx);
         }
-        p[np2] = UnEscapeURI(value);
+        p[np2] = wxURI::Unescape(value);
     }
     return p;
 }
@@ -102,22 +94,27 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                                               const std::string &jsonKey,
                                                               int responseCode,
                                                               bool msgIsJSON)> &sendResponse) {
+
+    if (paths.size() == 0) {
+        return sendResponse("No command", "msg", 503, false);
+    }
+
     std::string cmd = paths[0];
     if (cmd == "getVersion") {
         return sendResponse(GetDisplayVersionString(), "version", 200, false);
     } else if (cmd == "openSequence" || cmd == "getOpenSequence" || cmd == "loadSequence") {
         wxString fname = "";
         if (paths.size() > 1) {
-            fname = UnEscapeURI(paths[1]);
+            fname = wxURI::Unescape(paths[1]);
         }
         bool force = false;
         bool prompt = false;
         
-        if (params["_METHOD"] == "POST") {
-            wxString fname = params["_DATA"];
+        if (params["_METHOD"] == "POST" && !params["_DATA"].empty()) {
+            wxString data = params["_DATA"];
             wxJSONValue val;
             wxJSONReader reader;
-            if (reader.Parse(fname, &val) == 0) {
+            if (reader.Parse(data, &val) == 0) {
                 fname = val["seq"].AsString();
                 if (val.HasMember("promptIssues")) {
                     prompt = ReadBool(params["promptIssues"]);
@@ -137,13 +134,20 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         }
         if (fname.empty()) {
             if (CurrentSeqXmlFile != nullptr) {
-                return sendResponse(CurrentSeqXmlFile->GetName(), "seq", 200, false);
+                std::string response = wxString::Format("{\"seq\":\"%s\",\"fullseq\":\"%s\",\"media\":\"%s\",\"len\":%u,\"framems\":%u}",
+                                                        JSONSafe(CurrentSeqXmlFile->GetName()),
+                                                        JSONSafe(CurrentSeqXmlFile->GetFullPath()),
+                                                        JSONSafe(CurrentSeqXmlFile->GetMediaFile()),
+                                                        CurrentSeqXmlFile->GetSequenceDurationMS(),
+                                                        CurrentSeqXmlFile->GetFrameMS());
+
+                return sendResponse(response, "", 200, true);
             } else {
                 return sendResponse("Sequence not open.", "msg", 503, false);
             }
         } else {
             std::string seq = FindSequence(fname);
-            if (seq == "") {
+            if (seq.empty()) {
                 return sendResponse("Sequence not found.", "msg", 503, false);
             }
             if (CurrentSeqXmlFile != nullptr && force) {
@@ -153,7 +157,14 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             _promptBatchRenderIssues = prompt; // off by default
             OpenSequence(seq, nullptr);
             _promptBatchRenderIssues = oldPrompt;
-            return sendResponse(CurrentSeqXmlFile->GetName(), "seq", 200, false);
+            std::string response = wxString::Format("{\"seq\":\"%s\",\"fullseq\":\"%s\",\"media\":\"%s\",\"len\":%u,\"framems\":%u}",
+                                                    JSONSafe(CurrentSeqXmlFile->GetName()),
+                                                    JSONSafe(CurrentSeqXmlFile->GetFullPath()),
+                                                    JSONSafe(CurrentSeqXmlFile->GetMediaFile()),
+                                                    CurrentSeqXmlFile->GetSequenceDurationMS(),
+                                                    CurrentSeqXmlFile->GetFrameMS());
+
+            return sendResponse(response, "", 200, true);
         }
     } else if (cmd == "closeSequence") {
         if (CurrentSeqXmlFile == nullptr) {
@@ -206,19 +217,41 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         if (CurrentSeqXmlFile == nullptr) {
             return sendResponse("No sequence open.", "msg", 503, false);
         }
+        auto ld = _lowDefinitionRender;
+        auto highdef = params["highdef"];
+        if (highdef == "true" && _lowDefinitionRender) {
+            // override definition
+            _lowDefinitionRender = false;
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::renderAll");
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::renderAll");
+        }
         RenderAll();
         while (mRendering) {
             wxYield();
         }
+        if (ld != _lowDefinitionRender) {
+            _lowDefinitionRender = ld;
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::renderAll");
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::renderAll");
+        }
         return sendResponse("Rendered.", "msg", 200, false);
     } else if (cmd == "batchRender") {
         wxArrayString files;
-                
+
+        auto ld = _lowDefinitionRender;
+        auto highdef = params["highdef"];
+        if (highdef == "true" && _lowDefinitionRender) {
+            // override definition
+            _lowDefinitionRender = false;
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::batchRender");
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::batchRender");
+        }
+
         auto seqs = params["seqs_0"];
         int snum = 0;
         while (seqs != "") {
             auto seq = FindSequence(seqs);
-            if (seq == "") {
+            if (seq.empty()) {
                 return sendResponse("Sequence not found '" + seq + "'", "msg", 503, false);
             }
             files.push_back(seq);
@@ -229,6 +262,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         _promptBatchRenderIssues = ReadBool(params["promptIssues"]);
 
         _renderMode = true;
+        _saveLowDefinitionRender = _lowDefinitionRender;
         OpenRenderAndSaveSequences(files, false);
 
         while (_renderMode) {
@@ -236,6 +270,11 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         }
 
         _promptBatchRenderIssues = oldPrompt;
+        if (ld != _lowDefinitionRender) {
+            _lowDefinitionRender = ld;
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::batchRender");
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::batchRender");
+        }
         return sendResponse("Sequence batch rendered.", "msg", 200, false);
     } else if (cmd == "uploadController") {
         auto ip = params["ip"];
@@ -293,13 +332,19 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             fpp->SetRestartFlag();
         }
 
-        if (models == "true") {
-            wxJSONValue memoryMaps = FPP::CreateModelMemoryMap(&AllModels);
+        if (models == "true" || models == "all") {
+            wxJSONValue memoryMaps = fpp->CreateModelMemoryMap(&AllModels, 0, std::numeric_limits<int32_t>::max());
             fpp->UploadModels(memoryMaps);
+        } else if (udp == "local") {
+            auto c = _outputManager.GetControllers(fpp->ipAddress);
+            if (c.size() == 1) {
+                wxJSONValue const& memoryMaps = fpp->CreateModelMemoryMap(&AllModels, c.front()->GetStartChannel(), c.front()->GetEndChannel());
+                fpp->UploadModels(memoryMaps);
+            }
         }
 
         if (map == "true") {
-            std::string displayMap = FPP::CreateVirtualDisplayMap(&AllModels, GetDisplay2DCenter0());
+            std::string displayMap = FPP::CreateVirtualDisplayMap(&AllModels);
             fpp->UploadDisplayMap(displayMap);
             fpp->SetRestartFlag();
         }
@@ -316,14 +361,14 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         auto xsq = params["seq"];
         xsq = FindSequence(xsq);
 
-        if (xsq == "") {
+        if (xsq.empty()) {
             return sendResponse("Sequence not found.", "msg", 503, false);
         }
 
         auto fseq = xLightsXmlFile::GetFSEQForXSQ(xsq, GetFseqDirectory());
         auto m2 = xLightsXmlFile::GetMediaForXSQ(xsq, CurrentDir, GetMediaFolders());
 
-        if (!wxFile::Exists(fseq)) {
+        if (!FileExists(fseq)) {
             return sendResponse("Unable to find sequence FSEQ file.", "msg", 503, false);
         }
 
@@ -421,7 +466,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     } else if (cmd == "checkSequence") {
         auto seq = params["seq"];
         seq = FindSequence(seq);
-        if (seq == "") {
+        if (seq.empty()) {
             return sendResponse("Sequence not found.", "msg", 503, false);
         }
         auto file = OpenAndCheckSequence(seq);
@@ -468,7 +513,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         auto ip = params["ip"];
         ::wxLaunchDefaultBrowser(ip);
 
-        return "{\"res\":200,\"msg\":\"Controller opened.\"}";
+        return sendResponse("Controller opened", "msg", 200, false);
 
     } else if (cmd == "openControllerProxy") {
         auto ip = params["ip"];
@@ -480,7 +525,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
         auto proxy = controller->GetFPPProxy();
 
-        if (proxy == "") {
+        if (proxy.empty()) {
             return "{\"res\":504,\"msg\":\"Controller has no proxy.\"}";
         }
 
@@ -527,9 +572,9 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             format = "FPP";
         } else if (format == "eseqcompressed") {
             format = "FPPCompressed";
-        } else if (format == "avicompressed") {
+        } else if (format == "avicompressed" || format == "mp4compressed") {
             format = "Com";
-        } else if (format == "aviuncompressed") {
+        } else if (format == "aviuncompressed" || format == "mp4uncompressed") {
             format = "Unc";
         } else if (format == "minleon") {
             format = "Min";
@@ -542,6 +587,69 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         if (DoExportModel(0, 0, model, filename, format, false)) {
             return sendResponse("Model exported.", "msg", 200, false);
         } else {
+            return sendResponse("Failed to export.", "msg", 503, false);
+        }
+    } else if (cmd == "exportModelWithRender") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+
+        auto ld = _lowDefinitionRender;
+        auto highdef = params["highdef"];
+        if (highdef == "true" && _lowDefinitionRender) {
+            // override definition
+            _lowDefinitionRender = false;
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::exportModelWithRender");
+            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::exportModelWithRender");
+        }
+
+        auto model = params["model"];
+        if (AllModels.GetModel(model) == nullptr) {
+            return sendResponse("Unknown model.", "msg", 503, false);
+        }
+
+        auto filename = params["filename"];
+        auto format = params["format"];
+
+        if (format == "lsp") {
+            format = "LSP";
+        } else if (format == "lorclipboard") {
+            format = "Lcb";
+        } else if (format == "lorclipboards5") {
+            format = "LcbS5";
+        } else if (format == "vixenroutine") {
+            format = "Vir";
+        } else if (format == "hls") {
+            format = "HLS";
+        } else if (format == "eseq") {
+            format = "FPP";
+        } else if (format == "eseqcompressed") {
+            format = "FPPCompressed";
+        } else if (format == "avicompressed" || format == "mp4compressed") {
+            format = "Com";
+        } else if (format == "aviuncompressed" || format == "mp4uncompressed") {
+            format = "Unc";
+        } else if (format == "minleon") {
+            format = "Min";
+        } else if (format == "gif") {
+            format = "GIF";
+        } else {
+            return sendResponse("Unknown format.", "msg", 503, false);
+        }
+
+        if (DoExportModel(0, 0, model, filename, format, true)) {
+            if (ld != _lowDefinitionRender) {
+                _lowDefinitionRender = ld;
+                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::exportModelWithRender");
+                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::exportModelWithRender");
+            }
+            return sendResponse("Model exported.", "msg", 200, false);
+        } else {
+            if (ld != _lowDefinitionRender) {
+                _lowDefinitionRender = ld;
+                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::exportModelWithRender");
+                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::exportModelWithRender");
+            }
             return sendResponse("Failed to export.", "msg", 503, false);
         }
     } else if (cmd == "closexLights") {
@@ -570,8 +678,10 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
         }
 
-        wxCloseEvent evt;
+        // Click on the File quit menu item
+        wxCommandEvent evt(wxEVT_COMMAND_MENU_SELECTED, wxID_EXIT);
         wxPostEvent(this, evt);
+
         return sendResponse("xLights closed.", "msg", 200, false);
     } else if (cmd == "lightsOn") {
         EnableOutputs(true);
@@ -601,39 +711,316 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         }
     } else if (cmd == "e131Tag" || cmd == "getE131Tag") {
         return sendResponse(E131Output::GetTag(), "tag", 200, false);
+    } else if (cmd == "addEthernetController") {
+        auto c = new ControllerEthernet(&_outputManager);
+        //c->SetProtocol(params["protocol"]);
+        c->SetIP(params["ip"]);
+        c->SetId(1);
+        c->EnsureUniqueId();
+        c->SetName(params["name"]);
+        auto const vendors = ControllerCaps::GetVendors(c->GetType());
+        if (std::find(vendors.begin(), vendors.end(), params["vendor"]) != vendors.end()) {
+            c->SetVendor(params["vendor"]);
+            auto models = ControllerCaps::GetModels(c->GetType(), params["vendor"]);
+            if (std::find(models.begin(), models.end(), params["model"]) != models.end()) {
+                c->SetModel(params["model"]);
+                auto variants = ControllerCaps::GetVariants(c->GetType(), params["vendor"], params["model"]);
+                if (std::find(variants.begin(), variants.end(), params["variant"]) != variants.end()) {
+                    c->SetVariant(params["variant"]);
+                }
+            }
+        }
+        
+        _outputManager.AddController(c);
+        _outputModelManager.AddASAPWork(OutputModelManager::WORK_NETWORK_CHANGE, "Automation:ADDETHERNET");
+        _outputModelManager.AddASAPWork(OutputModelManager::WORK_NETWORK_CHANNELSCHANGE, "Automation:ADDETHERNET");
+        _outputModelManager.AddASAPWork(OutputModelManager::WORK_UPDATE_NETWORK_LIST, "Automation:ADDETHERNET", nullptr, c);
+        _outputModelManager.AddLayoutTabWork(OutputModelManager::WORK_CALCULATE_START_CHANNELS, "Automation:ADDETHERNET");
+        return sendResponse("Added Ethernet Controller", "msg", 200, false);
+    
+    } else if (cmd == "packageSequence") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        auto const filename = PackageSequence(false);
+        std::string response = wxString::Format("{\"msg\":\"Sequence Packaged.\",\"output\":\"%s\"}", JSONSafe(filename));
+        return sendResponse(response, "", 200, true);
+    } else if (cmd == "packageLogFiles") {
+        auto const filename = PackageDebugFiles(false);
+        std::string response = wxString::Format("{\"msg\":\"Log Files Packaged.\",\"output\":\"%s\"}", JSONSafe(filename));
+        return sendResponse(response, "", 200, true);
+
+    } else if (cmd == "exportVideoPreview") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+
+        auto filename = params["filename"];
+        if (filename == "" || filename == "null") {
+            filename = CurrentDir + wxFileName::GetPathSeparator() + CurrentSeqXmlFile->GetName() + ".mp4";
+        }
+        auto const worked = ExportVideoPreview(filename);
+        if (worked) {
+            std::string response = wxString::Format("{\"msg\":\"Export Video Preview.\",\"output\":\"%s\"}", JSONSafe(filename));
+            return sendResponse(response, "", 200, true);
+        }        
+        return sendResponse("Export Video Preview Failed", "msg", 503, true);
+    } else if (cmd == "runScript") {
+        auto filename = params["filename"];
+        if (filename.empty() || filename == "null" || !FileExists(filename)) {
+            return sendResponse("Invalid Script Path.", "msg", 503, false);
+        }
+
+        LuaRunner runner(this);
+        auto const worked = runner.Run_Script(filename, [](std::string const& m) {});
+        if (worked) {
+            std::string response = "{\"msg\":\"Script Was Successful.\"}";
+            return sendResponse(response, "", 200, true);
+        }
+        return sendResponse("Script Failed", "msg", 503, true);
+    } else if (cmd == "cloneModelEffects") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        auto target = params["target"];
+        auto source = params["source"];
+        auto erase = false;
+
+        if (!params["eraseModel"].empty()) {
+            erase = ReadBool(params["eraseModel"]);
+        }
+        auto const worked = CloneXLightsEffects(target, source, _sequenceElements, erase);
+        mainSequencer->PanelEffectGrid->Refresh();
+        std::string response = wxString::Format("{\"msg\":\"Model Effects Cloned.\",\"worked\":\"%s\"}", JSONSafe(toStr(worked)));
+        return sendResponse(response, "", 200, true);
+    } else if (cmd == "addEffect") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        auto target = params["target"];
+        auto effect = params["effect"];
+        auto settings = params["settings"];
+        auto palette = params["palette"];
+        Element* to = _sequenceElements.GetElement(target);
+        int startTime = 0;
+        int endTime = CurrentSeqXmlFile->GetSequenceDurationMS();
+        int layer = 0;
+
+        if (!params["layer"].empty()) {
+            layer = std::stoi(params["layer"]);
+        }
+        if (!params["startTime"].empty()) {
+            startTime = std::stoi(params["startTime"]);
+        }
+        if (!params["endTime"].empty()) {
+            endTime = std::stoi(params["endTime"]);
+        }
+
+        if (to == nullptr) {
+            return sendResponse("target element doesn't exists.", "msg", 503, false);
+        }
+        _sequenceElements.get_undo_mgr().CreateUndoStep();
+        while (to->GetEffectLayerCount() < layer + 1) {
+            to->AddEffectLayer();
+        }
+        auto valid = to->GetEffectLayer(layer)->AddEffect(0, effect, settings, palette,
+                                                          startTime, endTime, 0, false);
+        mainSequencer->PanelEffectGrid->Refresh();
+        std::string response = wxString::Format("{\"msg\":\"Added Effects.\",\"worked\":\"%s\"}", JSONSafe(toStr(valid != nullptr)));
+        return sendResponse(response, "", 200, true);
+    } else if (cmd == "getModels") {
+        std::string models;
+        for (auto m = (&AllModels)->begin(); m != (&AllModels)->end(); ++m) {
+            models += "\"" + JSONSafe(m->first) + "\",";
+        }
+        if (!models.empty()) {
+            models.pop_back();//remove last comma
+        }
+        models = "[" + models + "]";
+        return sendResponse(models, "models", 200, true);
+    } else if (cmd == "getControllerNames") {
+        std::string controllers;
+        for (const auto& it : _outputManager.GetControllerNames()) {
+            controllers += "\"" + JSONSafe(it) + "\",";
+        }
+        if (!controllers.empty()) {
+            controllers.pop_back();//remove last comma
+        }
+        controllers = "[" + controllers + "]";
+        return sendResponse(controllers, "controllers", 200, true);
+    } else if (cmd == "getControllerIPs") {
+        std::string ipAddresses;
+        for (const auto& it : _outputManager.GetControllers()) {
+            if (!it->GetIP().empty()) {
+                ipAddresses += "\"" + JSONSafe(it->GetIP()) + "\",";
+            }
+        }
+        if (!ipAddresses.empty()) {
+            ipAddresses.pop_back();//remove last comma
+        }
+        ipAddresses = "[" + ipAddresses + "]";
+        return sendResponse(ipAddresses, "controllers", 200, true);
+    } else if (cmd == "getEffectIDs") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        auto model = params["model"];
+        Element* ele = _sequenceElements.GetElement(model);
+        if (ele == nullptr) {
+            return sendResponse("target element doesn't exists.", "msg", 503, false);
+        }
+        std::string layers = "[";
+        for (int i = 0; i < ele->GetEffectLayerCount(); ++i) {
+            std::string ids;
+            auto effects = ele->GetEffectLayer(i)->GetAllEffects();
+            for (auto* eff : effects) {
+                ids += "\"" + std::to_string(eff->GetID()) + "\",";
+            }
+            if (!ids.empty()) {
+                ids.pop_back(); // remove last comma
+            }
+            ids.insert(0, "[");
+            ids.append( "],");
+            layers.append( ids );
+        }
+        layers.pop_back(); // remove last comma
+        layers += "]";
+        return sendResponse(layers, "effects", 200, true);
+    } else if (cmd == "getEffectSettings") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        int id = 0;
+        int layer = 0;
+
+        if (!params["id"].empty()) {
+            id = std::stoi(params["id"]);
+        }
+        if (!params["layer"].empty()) {
+            layer = std::stoi(params["layer"]);
+        }
+        auto const& model = params["model"];
+        Element* ele = _sequenceElements.GetElement(model);
+        if (ele == nullptr) {
+            return sendResponse("target element doesn't exists.", "msg", 503, false);
+        }
+        auto* lay = ele->GetEffectLayer(layer);
+        if (lay == nullptr) {
+            return sendResponse("target layer doesn't exists.", "msg", 503, false);
+        }
+        auto* eff = lay->GetEffectFromID(id);
+        if (eff != nullptr) {
+
+            std::string json = "{\"name\":\"" + eff->GetEffectName() + "\"" +
+                                ",\"settings\":" + eff->GetSettingsAsJSON() +
+                               ",\"palette\":" + eff->GetPaletteAsJSON() +
+                               ",\"startTime\":" + std::to_string(eff->GetStartTimeMS()) +
+                               ",\"endTime\":" + std::to_string(eff->GetEndTimeMS()) +
+                                ",\"selected\":" + std::to_string(eff->GetSelected()) + "}";
+            return sendResponse(json, "", 200, true);
+        }        
+        return sendResponse("target effect doesn't exists.", "msg", 503, false);
+    } else if (cmd == "setEffectSettings") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        int id = 0;
+        int layer = 0;
+
+        if (!params["id"].empty()) {
+            id = std::stoi(params["id"]);
+        }
+        if (!params["layer"].empty()) {
+            layer = std::stoi(params["layer"]);
+        }
+        auto const& model = params["model"];
+        Element* ele = _sequenceElements.GetElement(model);
+        if (ele == nullptr) {
+            return sendResponse("target element doesn't exists.", "msg", 503, false);
+        }
+        auto* lay = ele->GetEffectLayer(layer);
+        if (lay == nullptr) {
+            return sendResponse("target layer doesn't exists.", "msg", 503, false);
+        }
+        auto* eff = lay->GetEffectFromID(id);
+        if (eff != nullptr) {
+
+            if (!params["name"].empty()) {
+                eff->SetEffectName(params["name"]);
+            }
+            if (!params["startTime"].empty()) {
+                eff->SetStartTimeMS(std::stoi(params["startTime"]));
+            }
+            if (!params["endTime"].empty()) {
+                eff->SetEndTimeMS(std::stoi(params["endTime"]));
+            }
+            if (!params["settings"].empty()) {
+                eff->SetSettings(params["settings"], true , true);
+            }
+            if (!params["palette"].empty()) {
+                eff->SetColourOnlyPalette(params["palette"], true);
+            }
+            mainSequencer->PanelEffectGrid->Refresh();
+            mainSequencer->SelectEffect(eff);
+            std::string response = wxString::Format("{\"msg\":\"Set Effect Settings.\",\"worked\":\"%s\"}", JSONSafe(toStr(eff != nullptr)));
+            return sendResponse(response, "", 200, true);
+        }
+        return sendResponse("target effect doesn't exists.", "msg", 503, false);
+    } else if (cmd == "importXLightsSequence") {
+        if (CurrentSeqXmlFile == nullptr) {
+            return sendResponse("Sequence not open.", "msg", 503, false);
+        }
+        auto filename = params["filename"];
+        if (filename == "" || filename == "null"|| !wxFile::Exists(filename)) {
+            return sendResponse("Inport File not valid.", "msg", 503, false);
+        }
+        auto mapname = params["mapfile"];
+        if (mapname == "" || mapname == "null" || !wxFile::Exists(mapname)) {
+            return sendResponse("Mapping File no valid.", "msg", 503, false);
+        }
+        ImportXLights(wxFileName(filename), mapname);
+
+        wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+        wxPostEvent(this, eventRowHeaderChanged);
+        mainSequencer->PanelEffectGrid->Refresh();
+        
+        std::string response = "{\"msg\":\"Imported XLights Sequence.\",\"worked\":\"true\"}";
+        return sendResponse(response, "", 200, true);
+       
     }
 
     return false;
 }
 
 
-bool xLightsFrame::ProcessHttpRequest(HttpConnection &connection, HttpRequest &request) {
+bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& request)
+{
     wxString uri = request.URI();
     wxString params = "";
-    
+
     if (uri.find('?') != std::string::npos) {
         params = uri.substr(uri.find('?') + 1);
         uri = uri.substr(0, uri.find('?'));
     }
     std::vector<std::string> paths;
     std::map<std::string, std::string> paramMap = ParseParams(params);
-    
+
     if (uri[0] == '/') {
         uri = uri.substr(1);
     }
     while (uri.find('/') != std::string::npos) {
         wxString p = uri.substr(0, uri.find('/'));
-        paths.push_back(UnEscapeURI(p));
+        paths.push_back(wxURI::Unescape(p));
         uri = uri.substr(uri.find('/') + 1);
     }
-    paths.push_back(UnEscapeURI(uri));
+    paths.push_back(wxURI::Unescape(uri));
 
     wxString accept = request["Accept"];
     if (paths[0] == "xlDoAutomation") {
         paths.clear();
         params.clear();
         accept = MIME_JSON;
-        
+
         wxJSONValue val;
         wxJSONReader reader;
         if (reader.Parse(request.Data(), &val) == 0) {
@@ -644,7 +1031,7 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection &connection, HttpRequest &r
                 connection.SendResponse(resp);
                 return true;
             } else {
-                for (auto &mn : val.GetMemberNames()) {
+                for (auto& mn : val.GetMemberNames()) {
                     wxJSONValue v = val[mn];
                     if (mn == "cmd") {
                         paths.push_back(v.AsString());
@@ -673,15 +1060,13 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection &connection, HttpRequest &r
         }
     } else {
         paramMap["_METHOD"] = request.Method();
-        if (request.Method() == "POST" || request.Method() == "PUT")  {
+        if (request.Method() == "POST" || request.Method() == "PUT") {
             paramMap["_DATA"] = request.Data();
         }
     }
 
-    return ProcessAutomation(paths, paramMap, [&] (const std::string &msg,
-                                                   const std::string &jsonKey,
-                                                   int responseCode,
-                                                   bool isJson) {
+    return ProcessAutomation(paths, paramMap, [&](const std::string& msg, const std::string& jsonKey, int responseCode, bool isJson) {
+        static log4cpp::Category& logger_base = log4cpp::Category::getInstance(std::string("log_base"));
         HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)responseCode);
         resp.AddHeader("access-control-allow-origin", "*");
 
@@ -702,11 +1087,18 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection &connection, HttpRequest &r
         } else {
             resp.MakeFromText(msg, MIME_TEXT);
         }
-        connection.SendResponse(resp);
-        return true;
+        // The problem here is the connection may no longer be valid ... but i am not sure how to safely detect this
+        // This means if the client suddenly disconnects then xLights crashes on the SendResponse call as connection and request objects have all been destroyed from under us with no way to know it has happened
+        // adding this check helps but it still has a race condition
+        if (_automationServer->IsConnectionValid(&connection)) {
+            connection.SendResponse(resp);
+            return true;
+        } else {
+            logger_base.warn("Automation did not send result because connection lost.");
+        }
+        return false;
     });
 }
-
 
 void xLightsFrame::StartAutomationListener()
 {
@@ -724,14 +1116,14 @@ void xLightsFrame::StartAutomationListener()
     HttpServer *server = new HttpServer();
     HttpContext ctx;
     ctx.Port = ::GetxFadePort(_xFadePort);
-    
+
     ctx.RequestHandler = HttpRequestFunction;
     ctx.MessageHandler = nullptr;
 
     // default error pages content
     ctx.ErrorPage400 = HTTP_ERROR_PAGE;
     ctx.ErrorPage404 = HTTP_ERROR_PAGE;
-    
+
     if (!server->Start(ctx)) {
         logger_base.debug("xLights Automation could not listen on %d", ::GetxFadePort(_xFadePort));
         delete server;
@@ -865,14 +1257,6 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
                 // TODO
             } else if (cmd == "hinksPixExport") {
                 return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "packageLogFiles") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // MEDIUM PRIORITY
-                // TODO
-            } else if (cmd == "packageSequence") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // MEDIUM PRIORITY
                 // TODO
             } else if (cmd == "purgeDownloadCache") {
                 return "{\"res\":504,\"msg\":\"Not implemented.\"}";

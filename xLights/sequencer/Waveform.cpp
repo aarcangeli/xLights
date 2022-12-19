@@ -85,6 +85,9 @@ void Waveform::CloseMedia()
 {
     views.clear();
     mCurrentWaveView = NO_WAVE_VIEW_SELECTED;
+    _type = AUDIOSAMPLETYPE::RAW;
+    _lowNote = -1;
+    _highNote = -1;
 	_media = nullptr;
     mParent->Refresh();
 }
@@ -352,10 +355,12 @@ void Waveform::mouseWheelMoved(wxMouseEvent& event)
 int Waveform::OpenfileMedia(AudioManager* media, wxString& error)
 {
     _type = AUDIOSAMPLETYPE::RAW;
+    _lowNote = -1;
+    _highNote = -1;
     _media = media;
     views.clear();
 	if (_media != nullptr) {
-        _media->SwitchTo(AUDIOSAMPLETYPE::RAW);
+        _media->SwitchTo(_type);
 		float samplesPerLine = GetSamplesPerLineFromZoomLevel(mZoomLevel);
 		views.emplace_back(mZoomLevel, samplesPerLine, media, _type, _lowNote, _highNote);
 		mCurrentWaveView = 0;
@@ -369,7 +374,7 @@ int Waveform::OpenfileMedia(AudioManager* media, wxString& error)
 
 
 xlColor Waveform::ClearBackgroundColor() const {
-    if (AudioManager::GetSDL()->IsNoAudio()) {
+    if (AudioManager::GetSDLManager()->IsNoAudio()) {
         return xlRED;
     }
     return ColorManager::instance()->GetColor(ColorManager::COLOR_WAVEFORM_BACKGROUND);
@@ -482,8 +487,8 @@ void Waveform::DrawWaveView(xlGraphicsContext* ctx, const WaveView& wv)
             float pixelOffset = translateOffset(mStartPixelOffset);
 
             if (wv.background.get() == nullptr) {
-                wv.background = std::unique_ptr<xlVertexAccumulator>(ctx->createVertexAccumulator());
-                wv.outline = std::unique_ptr<xlVertexAccumulator>(ctx->createVertexAccumulator());
+                wv.background = std::unique_ptr<xlVertexAccumulator>(ctx->createVertexAccumulator()->SetName("WaveFill"));
+                wv.outline = std::unique_ptr<xlVertexAccumulator>(ctx->createVertexAccumulator()->SetName("WaveLines"));
             }
             wv.background->Reset();
             wv.outline->Reset();

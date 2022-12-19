@@ -29,6 +29,8 @@
 #include "../xLights/UtilFunctions.h"
 #include "../xLights/controllers/BaseController.h"
 
+#include "../xLights/automation/automation.h"
+
 #include <log4cpp/Category.hh>
 
 #ifndef __WXMSW__
@@ -81,6 +83,7 @@ const long xScannerFrame::ID_TIMER1 = wxNewId();
 
 const long xScannerFrame::ID_MNU_EXPORT = wxNewId();
 const long xScannerFrame::ID_MNU_RESCAN = wxNewId();
+const long xScannerFrame::ID_MNU_ADDTOXLIGHTS = wxNewId();
 
 BEGIN_EVENT_TABLE(xScannerFrame,wxFrame)
     //(*EventTable(xScannerFrame)
@@ -202,7 +205,7 @@ std::string xScannerFrame::GetIPSubnet(const std::string& ip)
 
 wxTreeListItem xScannerFrame::GetSubnetItem(const std::string& subnet)
 {
-    for (auto a = _tree->GetFirstItem(); a.IsOk(); a = _tree->GetNextSibling(a))         {
+    for (auto a = _tree->GetFirstItem(); a.IsOk(); a = _tree->GetNextSibling(a)) {
         if (_tree->GetItemText(a, 0) == subnet) return a;
     }
     auto item = _tree->AppendItem(_tree->GetRootItem(), subnet);
@@ -414,7 +417,7 @@ void xScannerFrame::ProcessHTTPResult(std::list<std::pair<std::string, std::stri
     }
 }
 
-std::list<std::string> xScannerFrame::GetStartsWith(std::list<std::pair<std::string, std::string>>& res, const std::string& prefix) 
+std::list<std::string> xScannerFrame::GetStartsWith(std::list<std::pair<std::string, std::string>>& res, const std::string& prefix)
 {
     std::list<std::string> result;
 
@@ -607,6 +610,7 @@ void xScannerFrame::ProcessDiscoverResult(std::list<std::pair<std::string, std::
         AddItemUnderParentIfNotBlank(item, "Platform Model", GetItem(res, "Platform Model"));
         AddItemUnderParentIfNotBlank(item, "Version", GetItem(res, "Version"));
         AddItemUnderParentIfNotBlank(item, "Mode", GetItem(res, "Mode"));
+        AddItemUnderParentIfNotBlank(item, "Pixels", GetItem(res, "Pixels"));
     }
 }
 
@@ -616,7 +620,7 @@ void xScannerFrame::ProcessxScheduleResult(std::list<std::pair<std::string, std:
     // Type
     // Port
     // Version
-       
+
     auto ip = GetItem(res, "IP");
     auto item = GetIPItem(ip);
 
@@ -718,58 +722,9 @@ void xScannerFrame::OnResize(wxSizeEvent& event)
     Layout();
 }
 
-void xScannerFrame::CreateDebugReport(wxDebugReportCompress *report) {
-    if (wxDebugReportPreviewStd().Show(*report)) {
-        report->Process();
-        SendReport("crashUpload", *report);
-        wxMessageBox("Crash report saved to " + report->GetCompressedFileName());
-    }
-    static log4cpp::Category &logger_base = log4cpp::Category::getInstance(std::string("log_base"));
-    logger_base.crit("Exiting after creating debug report: " + report->GetCompressedFileName());
-    delete report;
-    exit(1);
-}
-
-void xScannerFrame::SendReport(const wxString &loc, wxDebugReportCompress &report) {
-    wxHTTP http;
-    http.Connect("dankulp.com");
-
-    const char *bound = "--------------------------b29a7c2fe47b9481";
-
-    wxDateTime now = wxDateTime::Now();
-    int millis = wxGetUTCTimeMillis().GetLo() % 1000;
-    wxString ts = wxString::Format("%04d-%02d-%02d_%02d-%02d-%02d-%03d", now.GetYear(), now.GetMonth()+1, now.GetDay(), now.GetHour(), now.GetMinute(), now.GetSecond(), millis);
-
-    wxString fn = wxString::Format("xScanner-%s_%s_%s_%s.zip", wxPlatformInfo::Get().GetOperatingSystemFamilyName().c_str(), xlights_version_string, GetBitness(), ts);
-    const char *ct = "Content-Type: application/octet-stream\n";
-    std::string cd = "Content-Disposition: form-data; name=\"userfile\"; filename=\"" + fn.ToStdString() + "\"\n\n";
-
-    wxMemoryBuffer memBuff;
-    memBuff.AppendData(bound, strlen(bound));
-    memBuff.AppendData("\n", 1);
-    memBuff.AppendData(ct, strlen(ct));
-    memBuff.AppendData(cd.c_str(), strlen(cd.c_str()));
-
-
-    wxFile f_in(report.GetCompressedFileName());
-    wxFileOffset fLen = f_in.Length();
-    void* tmp = memBuff.GetAppendBuf(fLen);
-    size_t iRead = f_in.Read(tmp, fLen);
-    memBuff.UngetAppendBuf(iRead);
-    f_in.Close();
-
-    memBuff.AppendData("\n", 1);
-    memBuff.AppendData(bound, strlen(bound));
-    memBuff.AppendData("--\n", 3);
-
-    http.SetMethod("POST");
-    http.SetPostBuffer("multipart/form-data; boundary=------------------------b29a7c2fe47b9481", memBuff);
-    wxInputStream * is = http.GetInputStream("/" + loc + "/index.php");
-    char buf[1024];
-    is->Read(buf, 1024);
-    //printf("%s\n", buf);
-    delete is;
-    http.Close();
+void xScannerFrame::CreateDebugReport(xlCrashHandler* crashHandler)
+{
+    crashHandler->ProcessCrashReport(xlCrashHandler::SendReportOptions::ASK_USER_TO_SEND);
 }
 
 void xScannerFrame::OnKeyDown(wxKeyEvent& event)
@@ -792,9 +747,13 @@ void xScannerFrame::OnTreeItemActivated(wxTreeListEvent& event)
 
 void xScannerFrame::OnTreeRClick(wxTreeListEvent& event)
 {
+    _item = event.GetItem();
     wxMenu mnuLayer;
     mnuLayer.Append(ID_MNU_RESCAN, "Rescan");
     mnuLayer.Append(ID_MNU_EXPORT, "Export to CSV");
+    if (::IsIPValid(_tree->GetItemText(_item,0))) {
+        mnuLayer.Append(ID_MNU_ADDTOXLIGHTS, "Import to xLights");
+    }
     mnuLayer.Connect(wxEVT_COMMAND_MENU_SELECTED, (wxObjectEventFunction)&xScannerFrame::OnPopup, nullptr, this);
     PopupMenu(&mnuLayer);
 }
@@ -825,6 +784,20 @@ void xScannerFrame::ExportItem(int skip, wxTreeListItem& item, wxFile& f)
     }
 }
 
+void xScannerFrame::AddtoxLights(wxTreeListItem& item)
+{
+    auto const ip = _tree->GetItemText(item, 0);
+    auto name = _tree->GetItemText(item, 1);
+    if (name.empty()) {
+        name = ip;
+    }
+    std::string const cmd = "{\"cmd\":\"addEthernetController\", \"ip\":\"" + ip + "\", \"name\":\"" + name + "\"}";
+    auto const stat = Automation(false, "127.0.0.1", 0, "", cmd, {}, "");
+    if (stat != 0) {
+        wxMessageBox("Unable to Add Controller to xLights.\nVerify xLights is Running and xFade Port A or B is set in File->Preferences->Output Tab", "Error", 5L, this);
+    }
+}
+
 void xScannerFrame::OnPopup(wxCommandEvent& event)
 {
     if (event.GetId() == ID_MNU_EXPORT) {
@@ -843,12 +816,14 @@ void xScannerFrame::OnPopup(wxCommandEvent& event)
         auto item = _tree->GetRootItem();
         ExportItem(0, item, f);
     }
-    else if (event.GetId() == ID_MNU_RESCAN)         {
-        
+    else if (event.GetId() == ID_MNU_RESCAN) {
+
         // reset the work manager ... this cleans most current activities out
         _workManager.Restart();
 
         Scan();
+    } else if (event.GetId() == ID_MNU_ADDTOXLIGHTS) {
+        AddtoxLights(_item);
     }
 }
 

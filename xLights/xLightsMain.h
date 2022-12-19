@@ -698,7 +698,7 @@ public:
     static const long ID_BITMAPBUTTON2;
     static const long ID_PANEL2;
     static const long ID_BUTTON1;
-    static const long ID_BUTTON13;
+    static const long ID_BUTTON_TWINKLY;
     static const long ID_BUTTON2;
     static const long ID_BUTTON4;
     static const long ID_BUTTON7;

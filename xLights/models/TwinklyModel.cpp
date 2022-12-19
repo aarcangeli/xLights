@@ -108,10 +108,6 @@ void TwinklyModel::InitModel()
     }
 }
 
-void TwinklyModel::AddTypeProperties(wxPropertyGridInterface* grid)
-{
-}
-
 int TwinklyModel::OnPropertyGridChange(wxPropertyGridInterface* grid, wxPropertyGridEvent& event)
 {
     return Model::OnPropertyGridChange(grid, event);
@@ -122,9 +118,9 @@ bool TwinklyModel::SetLayout(const std::vector<std::tuple<float, float, float>>&
     std::vector<LightPosition> lightsTemp;
     for (auto pixel : layout) {
         LightPosition pos;
-        pos.x = pixel[0];
-        pos.y = pixel[1];
-        pos.z = pixel[2];
+        pos.x = std::get<0>(pixel);
+        pos.y = std::get<1>(pixel);
+        pos.z = std::get<2>(pixel);
         lightsTemp.push_back(pos);
     }
     lights = lightsTemp;

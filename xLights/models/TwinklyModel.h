@@ -18,7 +18,6 @@ public:
     TwinklyModel(wxXmlNode* node, const ModelManager& manager, bool zeroBased = false);
     virtual ~TwinklyModel();
 
-    virtual void AddTypeProperties(wxPropertyGridInterface* grid) override;
     virtual int OnPropertyGridChange(wxPropertyGridInterface* grid, wxPropertyGridEvent& event) override;
     virtual bool SupportsExportAsCustom() const override
     {

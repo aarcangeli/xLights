@@ -773,7 +773,7 @@
 																			<option>1</option>
 																		</object>
 																		<object class="sizeritem">
-																			<object class="wxButton" name="ID_BUTTON13" variable="ButtonControllerDownloadTwinklyLayout" member="yes">
+																			<object class="wxButton" name="ID_BUTTON_TWINKLY" variable="ButtonControllerDownloadTwinklyLayout" member="yes">
 																				<label>Get Layout</label>
 																				<handler function="OnButtonControllerDownloadTwinklyLayoutClick" entry="EVT_BUTTON" />
 																			</object>

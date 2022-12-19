@@ -117,45 +117,14 @@ int TwinklyModel::OnPropertyGridChange(wxPropertyGridInterface* grid, wxProperty
     return Model::OnPropertyGridChange(grid, event);
 }
 
-bool TwinklyModel::SetLayout(const wxJSONValue& layout)
+bool TwinklyModel::SetLayout(const std::vector<std::tuple<float, float, float>>& layout)
 {
-    const wxJSONInternalMap* map = layout.AsMap();
-    if (map == nullptr) {
-        return false;
-    }
-    auto coordinatesIt = map->find("coordinates");
-    if (coordinatesIt == map->end()) {
-        return false;
-    }
-    const wxJSONInternalArray* coordinates = coordinatesIt->second.AsArray();
-    if (coordinates == nullptr) {
-        return false;
-    }
     std::vector<LightPosition> lightsTemp;
-    for (int i = 0; i < coordinates->Count(); i++) {
-        const wxJSONInternalMap* pixelMap = (*coordinates)[i].AsMap();
-        if (pixelMap == nullptr) {
-            return false;
-        }
+    for (auto pixel : layout) {
         LightPosition pos;
-        {
-            auto iterator = pixelMap->find("x");
-            if (iterator != pixelMap->end()) {
-                iterator->second.AsDouble(pos.x);
-            }
-        }
-        {
-            auto iterator = pixelMap->find("y");
-            if (iterator != pixelMap->end()) {
-                iterator->second.AsDouble(pos.y);
-            }
-        }
-        {
-            auto iterator = pixelMap->find("z");
-            if (iterator != pixelMap->end()) {
-                iterator->second.AsDouble(pos.z);
-            }
-        }
+        pos.x = pixel[0];
+        pos.y = pixel[1];
+        pos.z = pixel[2];
         lightsTemp.push_back(pos);
     }
     lights = lightsTemp;

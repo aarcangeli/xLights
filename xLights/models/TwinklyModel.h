@@ -40,7 +40,7 @@ public:
     }
 
     // set layout from twinkly device
-    bool SetLayout(const wxJSONValue& layout);
+    bool SetLayout(const std::vector<std::tuple<float, float, float>>& layout);
 
 protected:
     virtual void InitModel() override;

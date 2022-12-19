@@ -2187,10 +2187,9 @@ void xLightsFrame::OnButtonControllerDownloadTwinklyLayoutClick(wxCommandEvent& 
             TwinklyOutput* output = dynamic_cast<TwinklyOutput*>(controller->GetOutput(0));
             if (output != nullptr) {
                 SetCursor(wxCURSOR_WAIT);
-                wxJSONValue layout;
-                bool reportError;
-                if (!output->GetLayout(layout, reportError)) {
-                    if (OutputManager::IsInteractive() && reportError) {
+                std::vector<std::tuple<float, float, float>> layout;
+                if (!output->GetLayout(layout)) {
+                    if (OutputManager::IsInteractive()) {
                         wxMessageBox(_("An error occurred"), "Error!", wxOK);
                     }
                     SetCursor(wxCURSOR_DEFAULT);
